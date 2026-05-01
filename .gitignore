@@ -1,7 +1,19 @@
-*.o
-enemy
-enemy.debug
+# build artifacts
+/enemy
+*.exe
+*.test
+*.out
+
+# Go
+/vendor/
+
+# editor
+.idea/
+.vscode/
 *.swp
 *.swo
-*~
-.DS_Store
+
+# misc
+*.bak
+*.tar.gz
+*.tgz
