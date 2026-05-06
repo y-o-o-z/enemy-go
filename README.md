@@ -49,7 +49,7 @@ których nie masz autoryzacji.**
 
 * Go ≥ **1.23.2**.
 * Internet do pobrania zależności:
-  * `github.com/kofany/go-ircevo` (≥ v1.2.5)
+  * `github.com/kofany/go-ircevo` (≥ v1.3.1)
   * `golang.org/x/net`, `golang.org/x/text`, `h12.io/socks`.
 * `git` do klonowania repo.
 
@@ -65,10 +65,31 @@ sudo install -m 0755 ./enemy /usr/local/bin/enemy
 enemy -version
 ```
 
-### Build ze źródeł
+### Najprościej — `install.sh` (jeden strzał)
+
+Skrypt instalacyjny pobiera repo z GitHuba, w razie potrzeby
+bootstrapuje toolchain Go, buduje binarkę i kopiuje ją do
+`/usr/local/bin/enemy`.
 
 ```bash
-git clone git@github.com:y-o-o-z/enemy-go.git
+curl -fsSL https://raw.githubusercontent.com/y-o-o-z/enemy-go/main/install.sh | bash
+```
+
+Ewentualnie z opcjami:
+
+```bash
+# bez sudo, do ~/.local/bin
+PREFIX="$HOME/.local" curl -fsSL https://raw.githubusercontent.com/y-o-o-z/enemy-go/main/install.sh | bash
+
+# z innego forka / brancha
+REPO_URL=https://github.com/youruser/enemy-go.git BRANCH=dev \
+    curl -fsSL https://raw.githubusercontent.com/y-o-o-z/enemy-go/main/install.sh | bash
+```
+
+### Build ze źródeł (ręcznie)
+
+```bash
+git clone https://github.com/y-o-o-z/enemy-go.git
 cd enemy-go
 go build -o enemy ./...
 sudo install -m 0755 ./enemy /usr/local/bin/enemy
@@ -124,6 +145,32 @@ pozwoli.
 
 ## Pierwsze uruchomienie
 
+### Tryb interaktywny (domyślny)
+
+Jeżeli odpalisz `enemy` bez argumentów na TTY, dostaniesz kreator
+startowy który zapyta cię po kolei o:
+
+1. rodzinę adresów (`ipv4` / `ipv6` / `both`),
+2. konkretne lokalne IP do binda (lista lub `all`),
+3. ile klonów odpalić,
+4. (opcjonalnie) na które kanały od razu wejść.
+
+Mode jest **wyprowadzany** z wybranych adresów — jeżeli wskażesz
+tylko IP-ki v6, klony łączą się po IPv6; jeżeli tylko v4 — po IPv4;
+jeżeli wymieszasz oba — leci dual-stack 50/50.
+
+```bash
+enemy
+```
+
+Po starcie pokazuje się konsola operatora z menu komend i statusem
+puli. Wpisz `help` żeby zobaczyć pełen reference.
+
+### Tryb skryptowy (flagi)
+
+Pomijasz kreator gdy podasz `-n`, `-bind-v4` lub `-bind-v6`, albo
+jawnie z `-no-wizard`:
+
 ```bash
 enemy -mode both -n 5 -channels '#test'
 ```
@@ -136,7 +183,11 @@ Co się stanie:
 [*] 12 open IRCnet servers
 [*] resolved: 12 total (v4=12, v6=10)
 [*] spawning 5 clones (stagger=250ms)...
-Type 'help' for available commands.
+──────────────────────────────────────────────────────────────────────
+  enemy-go — IRCnet test-clones console
+──────────────────────────────────────────────────────────────────────
+  status   5 clones (0 online)   mode=both   servers=12   bind v4=1 v6=23
+... menu ...
 enemy>
 ```
 
@@ -189,8 +240,10 @@ W shellu `enemy>`:
 ## Pliki w repo
 
 ```
+install.sh     — jednoplikowy installer (curl|bash)
 main.go        — CLI, flagi, sygnały, bootstrap menedżera
-shell.go       — interaktywny REPL operatora
+shell.go       — interaktywny REPL operatora + menu startowe
+wizard.go      — kreator startowy (rodzina IP, bindy, liczba klonów)
 manager.go     — pula klonów, scheduler IP/serwerów, broadcast
 clone.go       — pojedynczy klon (wrapper na go-ircevo + reconnect)
 servers.go     — fetch + DNS-resolve listy serwerów IRCnet
@@ -223,8 +276,8 @@ README.md      — ten plik
 
 Rewrite Go, własny kod. Inspiracja: oryginalna `enemy` autorstwa
 **fahren@bochnia.pl** (Maciej Freudenheim, 2002–2003) — z tego
-pochodzą m.in. alfabety nick-generatora i format kick-reasonów
-(`[PT]` suffix). Treść kick-reasonów w tej wersji jest świeża.
+pochodzą alfabety nick-generatora. Kick-reasony w tej wersji są
+świeże, suffix `[PT]` (Pojeby Team) został usunięty.
 
 To repo jest forkiem [`kofany/enemy`](https://github.com/kofany/enemy)
 (C — rebrand X-men2). Historia C-owego upstreamu jest zachowana w
