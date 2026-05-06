@@ -23,7 +23,33 @@ Na love.ircnet.pl (port SSH 33911, login `y`):
 
 ## Uruchamianie
 
-Zwykły user (NIE sudo). Najprostsze:
+Zwykły user (NIE sudo).
+
+### Tryb interaktywny (kreator startowy)
+
+Odpal bez argumentów:
+
+```bash
+enemy
+```
+
+Kreator pyta po kolei:
+
+1. **Address family** — `ipv4`, `ipv6` albo `both` (default `both`).
+2. **Bind IPs** — na które lokalne adresy klony mają się bindować.
+   Można wpisać `all`, listę indeksów (`1,3`) albo same adresy
+   (`203.0.113.5,2a01:6ee0::1`).
+3. **Liczba klonów** — ilu spawnować od razu (default 1).
+4. **Kanały** — opcjonalnie, CSV. Każdy klon zawoła `JOIN` po 001.
+
+Mode jest **wyprowadzany z wybranych IP-ków**: tylko v4 → `ipv4`,
+tylko v6 → `ipv6`, mieszane → `both`. Czyli klon nigdy nie spróbuje
+się połączyć po rodzinie której nie ma w puli.
+
+Bypass kreatora: dowolny z `-n / -bind-v4 / -bind-v6` albo
+`-no-wizard`.
+
+### Tryb skryptowy (flagi)
 
 ```bash
 enemy -mode both -n 5 -channels '#test'
@@ -35,7 +61,7 @@ Po starcie binarka:
 2. resolwuje je do A/AAAA,
 3. wykrywa lokalne IP (`v4=1 v6=23` na love),
 4. spawnuje `N` klonów (round-robin po serwerach, alternacja v4/v6 dla `mode=both`),
-5. wpada w interaktywny shell `enemy>`.
+5. wpada w interaktywny shell `enemy>` z menu komend.
 
 ### Najczęstsze flagi
 
@@ -54,6 +80,8 @@ Po starcie binarka:
 | `-reasons /path`         | jw. dla quit-reasonów                                                   | wbudowane              |
 | `-kick-reasons /path`    | jw. dla kick-reasonów                                                   | wbudowane              |
 | `-list-servers`          | tylko wypisuje ściągniętą listę i wychodzi                              | —                      |
+| `-i`                     | wymusza kreator startowy (interaktywne pytania)                         | —                      |
+| `-no-wizard`             | wyłącza auto-kreator nawet na TTY                                       | —                      |
 | `-version`               | pokazuje wersję                                                          | —                      |
 
 ### Przykłady
@@ -229,21 +257,29 @@ op myBot
 
 ## Kick-reasony
 
-Aktualnie zaszyte (po podaniu `.reasons` w shellu):
+Aktualnie zaszyte (po podaniu `reasons` w shellu):
 
 ```
-1. End of transmission. [PT]
-2. Channel sanitized. [PT]
-3. Connection refused by ownership. [PT]
-4. Welcome to /dev/null. [PT]
-5. Compiled with hate, deployed with intent. [PT]
-6. You logged into the wrong network. [PT]
-7. Recompiled, redeployed, removed. [PT]
-8. Better luck on a different server. [PT]
+1.  End of transmission.
+2.  Channel sanitized.
+3.  Connection refused by ownership.
+4.  Welcome to /dev/null.
+5.  Compiled with intent, deployed without remorse.
+6.  You logged into the wrong network.
+7.  Recompiled, redeployed, removed.
+8.  Better luck on a different server.
+9.  goodbye and thanks for all the fish.
+10. connection terminated by upstream policy.
+11. manual override engaged.
+12. buffer overflow detected, flushing.
+13. out of bounds — see you later.
+14. channel cleanup in progress.
+15. return to sender.
+16. this incident has been logged.
 ```
 
-Suffix `[PT]` zachowany jako odniesienie do oryginalnego Pojeby Team
-(autor: fahren, 2003), reszta jest świeża.
+Suffix `[PT]` (Pojeby Team) został usunięty — lista zawiera czysto
+neutralne komunikaty.
 
 Nadpisanie z pliku — jedna linia = jeden reason, `#` na początku linii
 to komentarz:

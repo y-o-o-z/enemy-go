@@ -36,7 +36,7 @@ func (s *Shell) printf(format string, args ...any) {
 
 // Run is blocking. When the user issues "exit"/"quit", Run returns.
 func (s *Shell) Run() {
-	s.printf("Type 'help' for available commands.\n")
+	s.printStartupMenu()
 	for {
 		fmt.Fprint(s.out, "enemy> ")
 		line, err := s.in.ReadString('\n')
@@ -118,29 +118,96 @@ func (s *Shell) dispatch(line string) bool {
 	return true
 }
 
+// printStartupMenu renders the post-launch operator console banner with a
+// quick-reference of the most-used commands. The full reference lives in
+// `help` (cmdHelp).
+func (s *Shell) printStartupMenu() {
+	total, online := s.mgr.Count()
+	mode := s.mgr.Mode()
+	v4, v6 := s.mgr.cfg.Pool.Counts()
+	srvCount := len(s.mgr.Servers())
+
+	const (
+		reset  = "\x1b[0m"
+		bold   = "\x1b[1m"
+		dim    = "\x1b[2m"
+		cyan   = "\x1b[36m"
+		green  = "\x1b[32m"
+		yellow = "\x1b[33m"
+		bar    = "──────────────────────────────────────────────────────────────────────"
+	)
+
+	s.printf("\n%s%s%s\n", cyan, bar, reset)
+	s.printf("  %senemy-go%s %s— IRCnet test-clones console%s\n", bold, reset, dim, reset)
+	s.printf("%s%s%s\n", cyan, bar, reset)
+	s.printf("  %sstatus%s   %s%d clones%s (%d online)   mode=%s%s%s   servers=%d   bind v4=%d v6=%d\n",
+		bold, reset, green, total, reset, online, yellow, mode, reset, srvCount, v4, v6)
+	s.printf("%s%s%s\n", cyan, bar, reset)
+	s.printf("  %sQUICK COMMANDS%s\n", bold, reset)
+	rows := [][2]string{
+		{"load <N>", "spawn N additional clones"},
+		{"stat", "list every clone (id, state, bind, nick, server)"},
+		{"join / part #chan", "have all clones join or leave a channel"},
+		{"msg / notice / say", "PRIVMSG / NOTICE from all clones (say = one random)"},
+		{"raw <line>", "one random clone sends a raw IRC line"},
+		{"mode <tgt> <flags>", "one random clone issues a MODE command"},
+		{"kick <#chan> <nick>", "one random clone tries KICK (random reason)"},
+		{"op / deop [#chan] <n>", "every online clone sends MODE +o / -o"},
+		{"servers / refresh", "show or refetch the IRCnet server list"},
+		{"pool / ipmode", "show local IPs / switch family for future spawns"},
+		{"reasons", "list configured kick reasons"},
+		{"del <id>", "disconnect and forget a single clone"},
+		{"disco", "QUIT all clones, keep the shell"},
+		{"exit / quit", "QUIT all clones and leave"},
+	}
+	for _, r := range rows {
+		s.printf("    %s%-22s%s  %s\n", green, r[0], reset, r[1])
+	}
+	s.printf("%s%s%s\n", cyan, bar, reset)
+	s.printf("  %stip:%s commands accept a leading '/' or '.' too — e.g. /load 3\n", dim, reset)
+	s.printf("  %stip:%s `help` shows the full reference; Ctrl-C does a clean QUIT round-trip\n", dim, reset)
+	s.printf("%s%s%s\n\n", cyan, bar, reset)
+}
+
 func (s *Shell) cmdHelp() {
-	s.printf(`Available commands:
-  load <N>                 spawn N more clones
-  stat                     list all clones with state
-  ipmode <ipv4|ipv6|both>  switch family for *future* clones
-  servers [N]              show first N servers from cached list (default 30)
-  refresh                  refetch server list from ircnet.info
-  pool                     show local IPs available for binding
-  join <#chan>             every clone joins
-  part <#chan>             every clone parts
-  msg <target> <text>      every clone PRIVMSG target
-  notice <target> <text>   every clone NOTICE target
-  say  <#chan> <text>      one random clone PRIVMSG
-  raw  <line>              one random clone sends raw IRC line
-  mode <target> <flags>    one random clone sets mode
-  kick <#chan> <nick> [r]  one random clone tries KICK (random reason if [r] omitted)
+	const bold = "\x1b[1m"
+	const reset = "\x1b[0m"
+	const cyan = "\x1b[36m"
+	s.printf(`
+%senemy-go — full command reference%s
+
+%sCLONE LIFECYCLE%s
+  load <N>                 spawn N more clones using the current mode/pool
+  del <id>                 disconnect and forget clone #id (see 'stat' for ids)
+  disco                    QUIT every clone but keep the shell alive
+  exit | quit              QUIT every clone and leave
+
+%sINSPECTION%s
+  stat [N]                 list clones (state, family, bind IP, nick, server)
+  pool                     show local IPv4/IPv6 addresses available for binding
+  servers [N]              show first N cached IRCnet servers (default 30)
+  refresh                  refetch the IRCnet server registry
   reasons                  list configured kick reasons
-  op   [#chan] <nick...>   every online clone sends MODE +o (post-takeover op grant)
+  ipmode [ipv4|ipv6|both]  show or change family policy for *future* spawns
+
+%sIRC ACTIONS%s
+  join <#chan>             every clone joins #chan (auto-rejoin on KICK)
+  part <#chan>             every clone parts #chan
+  msg <target> <text>      every clone sends PRIVMSG target :text
+  notice <target> <text>   every clone sends NOTICE target :text
+  say <target> <text>      one random clone sends PRIVMSG target :text
+  raw <line>               one random clone sends a raw IRC line
+  mode <target> <flags>    one random clone sets MODE flags on target
+  kick <#chan> <nick> [r]  one random clone tries KICK; random reason if omitted
+  op   [#chan] <nick...>   every online clone sends MODE +o (post-takeover)
   deop [#chan] <nick...>   every online clone sends MODE -o
-  del  <id>                disconnect & forget clone #id
-  disco                    quit all clones (keeps shell)
-  exit / quit              quit all clones and leave
-`)
+
+%sTIPS%s
+  • prefix any command with '/' or '.' if you have muscle memory from IRC
+  • quote arguments with " " when they contain spaces (e.g. msg #foo "hi there")
+  • to bypass the startup wizard pass -no-wizard or any of -n / -bind-v4 / -bind-v6
+
+`, bold, reset, cyan, reset, cyan, reset, cyan, reset, cyan, reset)
 }
 
 func (s *Shell) cmdQuit() {
