@@ -17,6 +17,10 @@
 #   PREFIX     install root         (default: /usr/local; binary goes to $PREFIX/bin)
 #   GO_VERSION go toolchain version to bootstrap if Go is missing (default: 1.23.4)
 #   KEEP_SRC   if "1", keep ./enemy-go source tree after install (default: discard)
+#   SKIP_IP_CHECK if "1", skip the up-front IP discovery step (default: 0)
+#   REQUIRE_IP if "v4" / "v6" / "any" / "none", abort installer when no usable
+#              address of that family is found (default: any — needs at least one
+#              globally-routable v4 OR v6 to bother installing the tool at all)
 
 set -euo pipefail
 
@@ -25,6 +29,8 @@ BRANCH="${BRANCH:-main}"
 PREFIX="${PREFIX:-/usr/local}"
 GO_VERSION="${GO_VERSION:-1.23.4}"
 KEEP_SRC="${KEEP_SRC:-0}"
+SKIP_IP_CHECK="${SKIP_IP_CHECK:-0}"
+REQUIRE_IP="${REQUIRE_IP:-any}"
 BIN_NAME="enemy"
 
 c_cyan='\033[36m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_bold='\033[1m'; c_reset='\033[0m'
@@ -133,6 +139,152 @@ build_and_install() {
     rm -rf "$workdir"
 }
 
+### --- network discovery --------------------------------------------------
+#
+# discover_ips writes one IP per line to stdout. The first column is the
+# family ("v4" / "v6"), the second column is the address, the third (best
+# effort) is the interface name. Filters out anything that cannot reach
+# the public Internet: loopback, link-local (169.254/16, fe80::/10),
+# multicast, unspecified, RFC1918 private v4, IPv6 ULAs (fc00::/7).
+#
+# Detection order:
+#   1) `ip -o addr`   (iproute2, modern Linux — preferred)
+#   2) `ifconfig -a`  (BusyBox / older Linux / macOS / BSD)
+#   3) `/proc/net/{fib_trie,if_inet6}` last-resort scrape (Linux only)
+
+_ip_is_public_v4() {
+    # arg: "a.b.c.d"
+    local ip="$1"
+    case "$ip" in
+        ""|0.0.0.0|255.255.255.255) return 1 ;;
+        127.*) return 1 ;;                    # loopback
+        169.254.*) return 1 ;;                # link-local
+        10.*) return 1 ;;                     # RFC1918
+        192.168.*) return 1 ;;                # RFC1918
+        100.64.*|100.65.*|100.66.*|100.67.*|100.68.*|100.69.*|100.7[0-9].*|100.8[0-9].*|100.9[0-9].*|100.10[0-9].*|100.11[0-9].*|100.12[0-7].*) return 1 ;; # CGNAT 100.64/10
+        172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 1 ;;  # 172.16/12
+        22[4-9].*|23[0-9].*|24[0-9].*|25[0-5].*) return 1 ;; # multicast/reserved
+    esac
+    # plain v4 dotted-quad sanity
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    return 0
+}
+
+_ip_is_public_v6() {
+    local ip="${1,,}"
+    case "$ip" in
+        ""|::|::1) return 1 ;;
+        fe[89ab]*:*|fe[89ab][0-9a-f]:*) return 1 ;;          # fe80::/10 link-local
+        f[cd][0-9a-f][0-9a-f]:*) return 1 ;;                 # fc00::/7 ULA
+        ff*:*) return 1 ;;                                   # multicast
+        ::ffff:*) return 1 ;;                                # IPv4-mapped
+    esac
+    [[ "$ip" == *:* ]] || return 1
+    return 0
+}
+
+discover_ips() {
+    local out=""
+    if have ip; then
+        # `ip -o addr show scope global` already filters out link-local on Linux.
+        out="$(ip -o addr show scope global 2>/dev/null \
+            | awk '{
+                fam = ($3 == "inet") ? "v4" : ($3 == "inet6") ? "v6" : "";
+                if (fam == "") next;
+                ifc = $2;
+                split($4, a, "/");
+                printf "%s %s %s\n", fam, a[1], ifc;
+              }')"
+    fi
+    if [[ -z "$out" ]] && have ifconfig; then
+        out="$(ifconfig -a 2>/dev/null \
+            | awk '
+                /^[a-zA-Z0-9_:.-]+:?[ \t]/ { sub(/:$/,"",$1); ifc=$1 }
+                /[ \t]+inet[ \t]/  { print "v4 " $2 " " ifc }
+                /[ \t]+inet6[ \t]/ {
+                    addr=$2; sub(/%.*/,"",addr); sub(/\/.*$/,"",addr);
+                    print "v6 " addr " " ifc;
+                }')"
+    fi
+    if [[ -z "$out" ]] && [[ -r /proc/net/if_inet6 ]]; then
+        # fallback: hex-decode /proc/net/if_inet6 for IPv6
+        out="$(awk '{
+                a=$1;
+                printf "v6 %s:%s:%s:%s:%s:%s:%s:%s %s\n",
+                    substr(a,1,4), substr(a,5,4), substr(a,9,4), substr(a,13,4),
+                    substr(a,17,4), substr(a,21,4), substr(a,25,4), substr(a,29,4),
+                    $6;
+              }' /proc/net/if_inet6 2>/dev/null)"
+    fi
+    [[ -n "$out" ]] || return 0
+
+    # Filter and dedupe.
+    printf "%s\n" "$out" | awk '
+        { key=$1" "$2; if (!(key in seen)) { seen[key]=1; print } }
+    ' | while read -r fam ip ifc; do
+        if [[ "$fam" == "v4" ]] && _ip_is_public_v4 "$ip"; then
+            printf "v4 %s %s\n" "$ip" "${ifc:-?}"
+        elif [[ "$fam" == "v6" ]] && _ip_is_public_v6 "$ip"; then
+            printf "v6 %s %s\n" "$ip" "${ifc:-?}"
+        fi
+    done
+}
+
+verify_ips() {
+    if [[ "$SKIP_IP_CHECK" == "1" ]]; then
+        log "SKIP_IP_CHECK=1 — pomijam wykrywanie adresów"
+        return 0
+    fi
+    log "wykrywanie globalnie-routowalnych adresów IP..."
+    local found
+    found="$(discover_ips || true)"
+
+    local v4_list v6_list v4_n v6_n
+    v4_list="$(printf "%s\n" "$found" | awk '$1=="v4"')"
+    v6_list="$(printf "%s\n" "$found" | awk '$1=="v6"')"
+    v4_n="$(printf "%s" "$v4_list" | grep -c '^v4 ' || true)"
+    v6_n="$(printf "%s" "$v6_list" | grep -c '^v6 ' || true)"
+
+    printf "\n  ${c_bold}IPv4${c_reset} (publiczne): %s\n" "$v4_n"
+    if [[ -n "$v4_list" ]]; then
+        while read -r _ ip ifc; do
+            [[ -n "$ip" ]] || continue
+            printf "    ${c_green}%-39s${c_reset}  %s\n" "$ip" "$ifc"
+        done <<< "$v4_list"
+    else
+        printf "    ${c_yellow}(brak)${c_reset}\n"
+    fi
+
+    printf "  ${c_bold}IPv6${c_reset} (publiczne): %s\n" "$v6_n"
+    if [[ -n "$v6_list" ]]; then
+        while read -r _ ip ifc; do
+            [[ -n "$ip" ]] || continue
+            printf "    ${c_green}%-39s${c_reset}  %s\n" "$ip" "$ifc"
+        done <<< "$v6_list"
+    else
+        printf "    ${c_yellow}(brak)${c_reset}\n"
+    fi
+    printf "\n"
+
+    case "$REQUIRE_IP" in
+        none)
+            ;;
+        v4)
+            [[ "$v4_n" -gt 0 ]] || die "REQUIRE_IP=v4 ale nie znaleziono żadnego publicznego IPv4"
+            ;;
+        v6)
+            [[ "$v6_n" -gt 0 ]] || die "REQUIRE_IP=v6 ale nie znaleziono żadnego publicznego IPv6"
+            ;;
+        any|*)
+            if [[ "$v4_n" -eq 0 && "$v6_n" -eq 0 ]]; then
+                die "nie znaleziono żadnego globalnie-routowalnego IP (v4 ani v6) — \
+enemy nie ma do czego się binda. Sprawdź \`ip addr\` lub ustaw SKIP_IP_CHECK=1 jeśli wiesz co robisz."
+            fi
+            ;;
+    esac
+    ok "wykryto $v4_n adres(ów) IPv4 i $v6_n adres(ów) IPv6"
+}
+
 main() {
     printf "${c_bold}${c_cyan}\n  enemy-go installer${c_reset}\n"
     printf "  repo:   %s\n  branch: %s\n  prefix: %s\n\n" "$REPO_URL" "$BRANCH" "$PREFIX"
@@ -141,6 +293,7 @@ main() {
         die "this installer supports Linux and macOS only"
     fi
 
+    verify_ips
     ensure_base_tools
     ensure_go
     build_and_install
