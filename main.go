@@ -41,6 +41,8 @@ func main() {
 		kickReasons  = flag.String("kick-reasons", "", "path to file with one kick-reason per line (optional)")
 		showVersion = flag.Bool("version", false, "print version and exit")
 		listOnly    = flag.Bool("list-servers", false, "fetch+print the open IRCnet server list, then exit")
+		interactive = flag.Bool("i", false, "force interactive setup wizard (asks for family, bind IPs, count, channels)")
+		noWizard    = flag.Bool("no-wizard", false, "disable the auto wizard even on a TTY (use raw flags only)")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, banner, version)
@@ -61,10 +63,39 @@ func main() {
 
 	v4 := splitCSV(*bindV4CSV)
 	v6 := splitCSV(*bindV6CSV)
+
+	fmt.Printf(banner, version)
+
+	// Auto-trigger the wizard when no clone count is given AND no explicit
+	// IP binds were passed AND stdin is a real TTY. -i forces it; -no-wizard
+	// suppresses it.
+	wantWizard := *interactive
+	if !wantWizard && !*noWizard && *count == 0 && len(v4) == 0 && len(v6) == 0 && IsInteractiveStdin() && !*listOnly {
+		wantWizard = true
+	}
+
+	if wantWizard {
+		choice, werr := RunStartupWizard(os.Stdin, os.Stdout)
+		if werr != nil {
+			log.Fatalf("wizard: %v", werr)
+		}
+		mode = choice.Mode
+		v4 = choice.BindV4
+		v6 = choice.BindV6
+		*count = choice.Count
+		if len(choice.Channels) > 0 {
+			*channelsCSV = strings.Join(choice.Channels, ",")
+		}
+	}
+
 	var pool *LocalIPPool
 	if v4 == nil && v6 == nil {
 		pool, err = NewLocalIPPool(nil, nil, mode)
 	} else {
+		// Auto-derive family from explicitly-supplied binds. If the user
+		// only gave IPv4 binds we lock the mode to v4 (and vice-versa);
+		// if they gave both, we use 'both' regardless of the -mode flag.
+		mode = deriveMode(v4, v6, mode)
 		pool, err = NewLocalIPPool(v4, v6, mode)
 	}
 	if err != nil {
@@ -72,7 +103,6 @@ func main() {
 	}
 	pV4, pV6 := pool.Counts()
 
-	fmt.Printf(banner, version)
 	fmt.Printf("[*] mode=%s  local IPs: v4=%d v6=%d\n", mode, pV4, pV6)
 
 	// fetch server list
@@ -144,6 +174,22 @@ func main() {
 	shell.Run()
 }
 
+// deriveMode adjusts the effective IP mode based on the bind lists the user
+// actually supplied. Explicit binds win over the -mode flag: passing only
+// IPv4 IPs forces v4-only, mixing both forces dual-stack, etc.
+func deriveMode(v4, v6 []string, requested IPMode) IPMode {
+	switch {
+	case len(v4) > 0 && len(v6) > 0:
+		return ModeBoth
+	case len(v4) > 0:
+		return ModeV4
+	case len(v6) > 0:
+		return ModeV6
+	default:
+		return requested
+	}
+}
+
 func splitCSV(s string) []string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -203,15 +249,23 @@ var defaultReasons = []string{
 	"Read error: Connection reset by peer",
 }
 
-// defaultKickReasons are sent in the KICK command. The [PT] suffix is kept
-// as a nod to the original (Pojeby Team) but the content is fresh.
+// defaultKickReasons are sent in the KICK command. Refreshed list — no
+// "Pojeby Team" / [PT] tag (legacy reference removed).
 var defaultKickReasons = []string{
-	"End of transmission. [PT]",
-	"Channel sanitized. [PT]",
-	"Connection refused by ownership. [PT]",
-	"Welcome to /dev/null. [PT]",
-	"Compiled with hate, deployed with intent. [PT]",
-	"You logged into the wrong network. [PT]",
-	"Recompiled, redeployed, removed. [PT]",
-	"Better luck on a different server. [PT]",
+	"End of transmission.",
+	"Channel sanitized.",
+	"Connection refused by ownership.",
+	"Welcome to /dev/null.",
+	"Compiled with intent, deployed without remorse.",
+	"You logged into the wrong network.",
+	"Recompiled, redeployed, removed.",
+	"Better luck on a different server.",
+	"goodbye and thanks for all the fish.",
+	"connection terminated by upstream policy.",
+	"manual override engaged.",
+	"buffer overflow detected, flushing.",
+	"out of bounds — see you later.",
+	"channel cleanup in progress.",
+	"return to sender.",
+	"this incident has been logged.",
 }
