@@ -43,6 +43,8 @@ func main() {
 		listOnly    = flag.Bool("list-servers", false, "fetch+print the open IRCnet server list, then exit")
 		interactive = flag.Bool("i", false, "force interactive setup wizard (asks for family, bind IPs, count, channels)")
 		noWizard    = flag.Bool("no-wizard", false, "disable the auto wizard even on a TTY (use raw flags only)")
+		oidentMode  = flag.String("oident", "auto", "oidentd integration: auto (use if oidentd is reachable), on (require), off")
+		oidentConf  = flag.String("oident-conf", "~/.oidentd.conf", "path to the per-user oidentd config file")
 	)
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, banner, version)
@@ -138,6 +140,11 @@ func main() {
 		log.Fatalf("no servers usable for mode=%s", mode)
 	}
 
+	oident, err := setupOident(*oidentMode, *oidentConf)
+	if err != nil {
+		log.Fatalf("oidentd: %v", err)
+	}
+
 	mgr := NewManager(ManagerConfig{
 		Pool:        pool,
 		Servers:     servers,
@@ -148,6 +155,7 @@ func main() {
 		QuitReasons: readLinesOr(*reasons, defaultReasons),
 		KickReasons: readLinesOr(*kickReasons, defaultKickReasons),
 		Stagger:     *stagger,
+		Oident:      oident,
 		Log:         log.Printf,
 	})
 
@@ -167,11 +175,45 @@ func main() {
 		shutCtx, c := context.WithTimeout(context.Background(), 8*time.Second)
 		defer c()
 		mgr.QuitAll(shutCtx)
+		_ = oident.Close()
 		os.Exit(0)
 	}()
 
 	shell := NewShell(mgr, *serverURL)
 	shell.Run()
+	_ = oident.Close()
+}
+
+// setupOident parses the -oident mode and returns a manager (or nil when
+// the integration is disabled). "auto" probes for a running oidentd and
+// silently disables the feature if none is found; "on" hard-fails when
+// oidentd is unreachable; "off" returns nil unconditionally.
+func setupOident(mode, confPath string) (*OidentManager, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "off", "no", "disable", "disabled":
+		return nil, nil
+	case "on", "force", "require", "required":
+		if !DetectOidentd() {
+			return nil, fmt.Errorf("-oident=on but oidentd is not reachable on 127.0.0.1:113")
+		}
+		return openOident(confPath)
+	case "", "auto":
+		if !DetectOidentd() {
+			fmt.Printf("[*] oidentd: not detected — using static idents (set -oident=on to require)\n")
+			return nil, nil
+		}
+		return openOident(confPath)
+	}
+	return nil, fmt.Errorf("invalid -oident value %q (use auto, on, off)", mode)
+}
+
+func openOident(path string) (*OidentManager, error) {
+	m, err := NewOidentManager(path, log.Printf)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("[*] oidentd: enabled, managing %s\n", m.Path())
+	return m, nil
 }
 
 // deriveMode adjusts the effective IP mode based on the bind lists the user

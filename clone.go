@@ -64,16 +64,21 @@ type Clone struct {
 	// channels we *want* to be in. Driven by the manager via Join/Part.
 	channels map[string]bool
 
+	// optional ident broker — when set, each connect attempt asks for
+	// the ident matching (LocalIP, server) and uses it in USER.
+	oident *OidentManager
+
 	stop chan struct{}
 	done chan struct{}
 
 	log func(format string, args ...any)
 }
 
-func NewClone(cfg CloneConfig, log func(string, ...any)) *Clone {
+func NewClone(cfg CloneConfig, oident *OidentManager, log func(string, ...any)) *Clone {
 	c := &Clone{
 		cfg:      cfg,
 		channels: make(map[string]bool),
+		oident:   oident,
 		stop:     make(chan struct{}),
 		done:     make(chan struct{}),
 		log:      log,
@@ -134,7 +139,19 @@ func (c *Clone) Run() {
 }
 
 func (c *Clone) connectOnce() error {
-	conn := irc.IRC(c.cfg.Nick, c.cfg.User)
+	user := c.cfg.User
+	if c.oident != nil {
+		host, _, err := net.SplitHostPort(c.cfg.Server)
+		if err != nil {
+			host = c.cfg.Server
+		}
+		if id, err := c.oident.Reserve(c.cfg.LocalIP, host); err == nil && id != "" {
+			user = id
+		} else if err != nil {
+			c.log("[clone %d] oident reserve failed: %v (falling back to %s)", c.cfg.ID, err, user)
+		}
+	}
+	conn := irc.IRC(c.cfg.Nick, user)
 	conn.RealName = c.cfg.RealName
 	conn.QuitMessage = c.cfg.QuitReason
 	conn.Timeout = 20 * time.Second
