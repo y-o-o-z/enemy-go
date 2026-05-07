@@ -25,6 +25,7 @@ type ManagerConfig struct {
 	QuitReasons []string
 	KickReasons []string
 	Stagger     time.Duration
+	Oident      *OidentManager
 
 	Log func(string, ...any)
 }
@@ -137,7 +138,7 @@ func (m *Manager) Spawn(n int) ([]*Clone, error) {
 		if cfg.RealName == "" {
 			cfg.RealName = cfg.Nick
 		}
-		clone := NewClone(cfg, m.cfg.Log)
+		clone := NewClone(cfg, m.cfg.Oident, m.cfg.Log)
 
 		m.mu.Lock()
 		m.clones[id] = clone
@@ -325,6 +326,14 @@ func (m *Manager) Mode() IPMode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.cfg.Mode
+}
+
+// Oident returns the active ident broker, or nil if oidentd integration
+// is disabled. Used by the shell for status reporting.
+func (m *Manager) Oident() *OidentManager {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg.Oident
 }
 
 // SwapServers updates the resolved server list (e.g. after a refresh).

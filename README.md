@@ -246,12 +246,56 @@ shell.go       — interaktywny REPL operatora + menu startowe
 wizard.go      — kreator startowy (rodzina IP, bindy, liczba klonów)
 manager.go     — pula klonów, scheduler IP/serwerów, broadcast
 clone.go       — pojedynczy klon (wrapper na go-ircevo + reconnect)
+oident.go      — broker identów do ~/.oidentd.conf (per-IP/serwer)
 servers.go     — fetch + DNS-resolve listy serwerów IRCnet
 pool.go        — auto-detect lokalnych IP, IPMode (v4/v6/both)
 random.go      — generator nicków/identów wzorowany na C enemy
 go.mod / go.sum — moduł Go
 INFO.md        — pełna instrukcja obsługi (PL)
 README.md      — ten plik
+```
+
+---
+
+## oidentd — więcej klonów z jednego usera
+
+IRCnet liczy limity połączeń per `(ident@host)`, nie per host. Z
+`oidentd` zainstalowanym i uruchomionym, każdy klon dostaje od
+`enemy` własny losowy ident (per `(local-IP, serwer)`), więc **z jednego
+unixowego usera i jednego IP można odpalić znacznie więcej klonów**
+niż domyślne ~4 (typowy limit IRCnet).
+
+Tryb działania:
+
+* `-oident=auto` (default) — `enemy` probuje port 113 na localhoście;
+  jeśli `oidentd` żyje → włącza integrację, pisze reguły do
+  `~/.oidentd.conf`. Jak nie żyje, wraca na statyczny ident.
+* `-oident=on` — wymusza, fail jeśli daemon nieaktywny.
+* `-oident=off` — wyłącza.
+* `-oident-conf <path>` — inny plik (default `~/.oidentd.conf`).
+
+Reguły zapisywane są w bloku oznaczonym sentinelami
+`# >>> enemy-go managed >>>` ... `# <<< enemy-go managed <<<` —
+twoja własna konfiguracja **poza** tym blokiem nie jest ruszana.
+Przy `exit` / SIGINT / SIGTERM blok jest czyszczony.
+
+Limit: go-ircevo nie udostępnia ustawienia source-portu, więc reguły
+są kluczowane na `(local-IP, serwer)` — z N lokalnymi IP i M
+serwerami w rotacji dostajesz do `N×M` jednoczesnych unikalnych
+identów. Dalsze klony wpadające na te same pary `(IP, serwer)`
+dostają już istniejący ident.
+
+Instalacja oidentd (Debian/Ubuntu):
+
+```bash
+sudo apt-get install -y oidentd
+sudo systemctl enable --now oidentd
+```
+
+Lub jednoplikowy installer z opcją:
+
+```bash
+INSTALL_OIDENTD=1 curl -fsSL https://raw.githubusercontent.com/y-o-o-z/enemy-go/main/install.sh | bash
 ```
 
 ---
