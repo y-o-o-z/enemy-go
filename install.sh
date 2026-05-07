@@ -21,6 +21,8 @@
 #   REQUIRE_IP if "v4" / "v6" / "any" / "none", abort installer when no usable
 #              address of that family is found (default: any — needs at least one
 #              globally-routable v4 OR v6 to bother installing the tool at all)
+#   INSTALL_OIDENTD if "1", install + enable oidentd so each clone can register
+#              its own ident (default: 0 — installer only suggests it)
 
 set -euo pipefail
 
@@ -31,6 +33,7 @@ GO_VERSION="${GO_VERSION:-1.23.4}"
 KEEP_SRC="${KEEP_SRC:-0}"
 SKIP_IP_CHECK="${SKIP_IP_CHECK:-0}"
 REQUIRE_IP="${REQUIRE_IP:-any}"
+INSTALL_OIDENTD="${INSTALL_OIDENTD:-0}"
 BIN_NAME="enemy"
 
 c_cyan='\033[36m'; c_green='\033[32m'; c_yellow='\033[33m'; c_red='\033[31m'; c_bold='\033[1m'; c_reset='\033[0m'
@@ -285,6 +288,73 @@ enemy nie ma do czego się binda. Sprawdź \`ip addr\` lub ustaw SKIP_IP_CHECK=1
     ok "wykryto $v4_n adres(ów) IPv4 i $v6_n adres(ów) IPv6"
 }
 
+### --- oidentd integration -----------------------------------------------
+#
+# enemy-go can register a per-(local-IP, server) ident with a running
+# oidentd, which lets one user open many more concurrent clones to IRCnet
+# (the network's per-(ident@host) limit becomes per-ident-per-host
+# instead of just per-host). We probe + optionally install oidentd here.
+
+probe_oidentd() {
+    if have ss; then
+        ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE '(:113|:113$)' && return 0
+    fi
+    if have netstat; then
+        netstat -lnt 2>/dev/null | awk '{print $4}' | grep -qE '(:113|:113$)' && return 0
+    fi
+    if have pgrep; then
+        pgrep -x oidentd >/dev/null 2>&1 && return 0
+    fi
+    return 1
+}
+
+install_oidentd() {
+    local pm; pm="$(detect_pkg_mgr)"
+    log "instaluję oidentd (via $pm)"
+    case "$pm" in
+        apt)    sudo apt-get update -qq && sudo apt-get install -y -qq oidentd ;;
+        dnf)    sudo dnf install -y -q oidentd ;;
+        yum)    sudo yum install -y -q oidentd ;;
+        pacman) sudo pacman -S --noconfirm oidentd ;;
+        apk)    sudo apk add --no-progress oidentd ;;
+        brew)   brew install oidentd ;;
+        *)      warn "no supported package manager — install oidentd manually"; return 1 ;;
+    esac
+    if have systemctl; then
+        sudo systemctl enable --now oidentd 2>/dev/null \
+            || sudo systemctl enable --now oidentd.socket 2>/dev/null \
+            || warn "couldn't enable oidentd via systemctl — start it manually"
+    fi
+}
+
+verify_oidentd() {
+    if probe_oidentd; then
+        ok "oidentd jest aktywny (port 113 nasłuchuje) — enemy automatycznie zarejestruje per-klon ident"
+        return 0
+    fi
+    if [[ "$INSTALL_OIDENTD" == "1" ]]; then
+        install_oidentd
+        if probe_oidentd; then
+            ok "oidentd zainstalowany i uruchomiony"
+        else
+            warn "oidentd zainstalowany, ale nie nasłuchuje na :113 — sprawdź konfigurację"
+        fi
+        return 0
+    fi
+    warn "oidentd nieaktywny — klony użyją statycznego identa (jeden per-klon, ale bez per-(IP,server) rotacji)."
+    warn "  Aby włączyć ten trick (więcej klonów z 1 usera): doinstaluj oidentd, np."
+    case "$(detect_pkg_mgr)" in
+        apt)    printf "    sudo apt-get install -y oidentd && sudo systemctl enable --now oidentd\n" ;;
+        dnf|yum)printf "    sudo %s install -y oidentd && sudo systemctl enable --now oidentd\n" "$(detect_pkg_mgr)" ;;
+        pacman) printf "    sudo pacman -S oidentd && sudo systemctl enable --now oidentd\n" ;;
+        apk)    printf "    sudo apk add oidentd && sudo rc-update add oidentd && sudo rc-service oidentd start\n" ;;
+        brew)   printf "    brew install oidentd && brew services start oidentd\n" ;;
+        *)      printf "    (zainstaluj pakiet 'oidentd' z menedżera systemu)\n" ;;
+    esac
+    printf "  Albo odpal installer z INSTALL_OIDENTD=1, np.:\n"
+    printf "    INSTALL_OIDENTD=1 curl -fsSL https://raw.githubusercontent.com/y-o-o-z/enemy-go/main/install.sh | bash\n"
+}
+
 main() {
     printf "${c_bold}${c_cyan}\n  enemy-go installer${c_reset}\n"
     printf "  repo:   %s\n  branch: %s\n  prefix: %s\n\n" "$REPO_URL" "$BRANCH" "$PREFIX"
@@ -294,6 +364,7 @@ main() {
     fi
 
     verify_ips
+    verify_oidentd
     ensure_base_tools
     ensure_go
     build_and_install
