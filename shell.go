@@ -142,6 +142,12 @@ func (s *Shell) printStartupMenu() {
 	s.printf("%s%s%s\n", cyan, bar, reset)
 	s.printf("  %sstatus%s   %s%d clones%s (%d online)   mode=%s%s%s   servers=%d   bind v4=%d v6=%d\n",
 		bold, reset, green, total, reset, online, yellow, mode, reset, srvCount, v4, v6)
+	if oid := s.mgr.Oident(); oid != nil {
+		s.printf("  %soident%s   %son%s, %d ident reservation(s) in %s\n",
+			bold, reset, green, reset, oid.Count(), oid.Path())
+	} else {
+		s.printf("  %soident%s   %soff%s — clones use a static USER ident\n", bold, reset, yellow, reset)
+	}
 	s.printf("%s%s%s\n", cyan, bar, reset)
 	s.printf("  %sQUICK COMMANDS%s\n", bold, reset)
 	rows := [][2]string{
